@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Attrape le carré 🎮</title>
+  <style>
+    body {
+      background: #222;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      font-family: Arial, sans-serif;
+      overflow: hidden;
+    }
+
+    h1 { margin-bottom: 10px; }
+
+    #score {
+      font-size: 1.5em;
+      margin-bottom: 20px;
+    }
+
+    #game-area {
+      position: relative;
+      width: 80vw;
+      height: 60vh;
+      border: 2px solid #fff;
+      overflow: hidden;
+      border-radius: 10px;
+    }
+
+    #square {
+      position: absolute;
+      width: 50px;
+      height: 50px;
+      background: #4e54c8;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    #square:hover {
+      background: #8f94fb;
+    }
+  </style>
+</head>
+<body>
+  <h1>Attrape le carré 🎯</h1>
+  <div id="score">Score : 0</div>
+  <div id="game-area">
+    <div id="square"></div>
+  </div>
+
+  <script>
+    const square = document.getElementById('square');
+    const scoreDisplay = document.getElementById('score');
+    const gameArea = document.getElementById('game-area');
+    let score = 0;
+
+    function randomPosition() {
+      const maxX = gameArea.clientWidth - square.clientWidth;
+      const maxY = gameArea.clientHeight - square.clientHeight;
+      const x = Math.random() * maxX;
+      const y = Math.random() * maxY;
+      square.style.left = `${x}px`;
+      square.style.top = `${y}px`;
+    }
+
+    square.addEventListener('click', () => {
+      score++;
+      scoreDisplay.textContent = 'Score : ' + score;
+      randomPosition();
+    });
+
+    // Déplace le carré toutes les 2 secondes
+    setInterval(randomPosition, 2000);
+
+    randomPosition();
+  </script>
+</body>
+</html>

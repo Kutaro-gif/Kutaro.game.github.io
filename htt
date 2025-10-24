@@ -1,0 +1,250 @@
+```json
+{
+  "name": "minidiscord-server",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.1"
+  }
+}
+```
+
+### server.js
+```js
+// Serveur Node minimal utilisant Express + Socket.io
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*'
+  }
+});
+
+// Stockage en mémoire (pour démo seulement)
+const channels = [
+  { id: 'general', name: 'general', messages: [] },
+  { id: 'random', name: 'random', messages: [] }
+];
+
+app.get('/channels', (req, res) => {
+  res.json(channels.map(c => ({ id: c.id, name: c.name }))); 
+});
+
+app.get('/channels/:id/messages', (req, res) => {
+  const ch = channels.find(c => c.id === req.params.id);
+  if (!ch) return res.status(404).json({ error: 'Channel not found' });
+  res.json(ch.messages);
+});
+
+io.on('connection', (socket) => {
+  console.log('socket connected', socket.id);
+
+  socket.on('joinChannel', ({ channelId, username }) => {
+    socket.join(channelId);
+    socket.data.username = username || 'Anon';
+    console.log(`${socket.data.username} joined ${channelId}`);
+
+    // notify others in channel
+    socket.to(channelId).emit('systemMessage', {
+      text: `${socket.data.username} a rejoint le salon.`,
+      time: Date.now()
+    });
+  });
+
+  socket.on('sendMessage', ({ channelId, text }) => {
+    const username = socket.data.username || 'Anon';
+    const msg = { id: Date.now() + '-' + Math.random().toString(36).slice(2,8), username, text, time: Date.now() };
+
+    // save
+    const ch = channels.find(c => c.id === channelId);
+    if (ch) {
+      ch.messages.push(msg);
+      // keep last 500 messages max
+      if (ch.messages.length > 500) ch.messages.shift();
+    }
+
+    io.to(channelId).emit('message', msg);
+  });
+
+  socket.on('typing', ({ channelId, isTyping }) => {
+    socket.to(channelId).emit('typing', { username: socket.data.username || 'Anon', isTyping });
+  });
+
+  socket.on('disconnect', () => {
+    console.log('socket disconnected', socket.id);
+  });
+});
+
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => console.log('Server listening on', PORT));
+```
+
+---
+
+## Client React (Vite) — structure minimale
+
+Créez un nouveau projet Vite React (`npm create vite@latest client -- --template react`) ou utilisez le code suivant dans `src/App.jsx`.
+
+### client/package.json (extraits)
+```json
+{
+  "name": "minidiscord-client",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "socket.io-client": "^4.7.1"
+  }
+}
+```
+
+### src/App.jsx
+```jsx
+import React, { useEffect, useState, useRef } from 'react';
+import io from 'socket.io-client';
+
+const SERVER = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+
+const socket = io(SERVER);
+
+export default function App(){
+  const [channels, setChannels] = useState([]);
+  const [current, setCurrent] = useState('general');
+  const [messages, setMessages] = useState([]);
+  const [username, setUsername] = useState('');
+  const [text, setText] = useState('');
+  const [typingUsers, setTypingUsers] = useState({});
+  const typingTimeout = useRef(null);
+
+  useEffect(()=>{
+    fetch(SERVER + '/channels').then(r=>r.json()).then(setChannels).catch(console.error);
+  },[]);
+
+  useEffect(()=>{
+    if (!current) return;
+    fetch(`${SERVER}/channels/${current}/messages`).then(r=>r.json()).then(setMessages).catch(console.error);
+
+    socket.emit('joinChannel', { channelId: current, username: username || 'Anon' });
+
+    const onMessage = (msg)=> setMessages(prev => [...prev, msg]);
+    const onSystem = (sys)=> setMessages(prev => [...prev, { id: 'sys-' + Date.now(), username: 'SYSTEM', text: sys.text, time: sys.time }]);
+    const onTyping = ({ username: u, isTyping }) => {
+      setTypingUsers(prev => ({ ...prev, [u]: isTyping }));
+    }
+
+    socket.on('message', onMessage);
+    socket.on('systemMessage', onSystem);
+    socket.on('typing', onTyping);
+
+    return ()=>{
+      socket.off('message', onMessage);
+      socket.off('systemMessage', onSystem);
+      socket.off('typing', onTyping);
+    }
+  }, [current, username]);
+
+  function send(){
+    if (!text.trim()) return;
+    socket.emit('sendMessage', { channelId: current, text });
+    setText('');
+    socket.emit('typing', { channelId: current, isTyping: false });
+  }
+
+  function handleTyping(e){
+    setText(e.target.value);
+    socket.emit('typing', { channelId: current, isTyping: true });
+    clearTimeout(typingTimeout.current);
+    typingTimeout.current = setTimeout(()=>{
+      socket.emit('typing', { channelId: current, isTyping: false });
+    }, 800);
+  }
+
+  const typingList = Object.keys(typingUsers).filter(u => typingUsers[u] && u !== (username || 'Anon'));
+
+  return (
+    <div style={{ display: 'flex', height: '100vh', fontFamily: 'Arial, sans-serif' }}>
+      <aside style={{ width: 220, borderRight: '1px solid #ddd', padding: 12 }}>
+        <h3>MiniDiscord</h3>
+        <div>
+          <label>Nom: </label>
+          <input value={username} onChange={e=>setUsername(e.target.value)} placeholder="Votre pseudo" />
+        </div>
+        <hr />
+        <div>
+          <h4>Salons</h4>
+          <ul style={{ paddingLeft: 0 }}>
+            {channels.map(ch => (
+              <li key={ch.id} style={{ listStyle: 'none', margin: 6 }}>
+                <button onClick={()=>setCurrent(ch.id)} style={{ background: ch.id===current? '#ddd' : 'transparent' }}>{ch.name}</button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </aside>
+
+      <main style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        <header style={{ padding: 12, borderBottom: '1px solid #eee' }}>
+          <strong>#{current}</strong>
+        </header>
+
+        <div style={{ flex: 1, padding: 12, overflow: 'auto' }}>
+          {messages.map(m => (
+            <div key={m.id} style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: '#666' }}>
+                <strong style={{ color: '#222' }}>{m.username}</strong> <span style={{ marginLeft: 6 }}>{new Date(m.time).toLocaleTimeString()}</span>
+              </div>
+              <div>{m.text}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ padding: 12, borderTop: '1px solid #eee' }}>
+          <div style={{ minHeight: 18 }}>
+            {typingList.length ? <em>{typingList.join(', ')} est en train d'écrire...</em> : null}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <input value={text} onChange={handleTyping} onKeyDown={(e)=> e.key === 'Enter' && send()} placeholder="Écrire un message..." style={{ flex: 1 }} />
+            <button onClick={send}>Envoyer</button>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+```
+
+---
+
+## Instructions rapides
+
+1. Créez deux dossiers `server` et `client`.
+2. Dans `server` : copiez `package.json` + `server.js`, puis `npm install` et `npm start`.
+3. Dans `client` : créez un projet Vite React, installez `socket.io-client`, remplacez `src/App.jsx` par le fichier ci-dessus, et lancez `npm run dev`.
+4. Ouvrez le client, entrez un pseudo, choisissez un salon et discutez en temps réel.
+
+---
+
+## Remarques & améliorations possibles
+- **Sécurité / production** : ajoutez authentification, rate-limiting, persistance (DB), validation des messages.
+- **Fonctions Discord-like** : messages privés, roles, permissions, upload de fichiers, réactions, threads.
+- **UI** : remplacer par Tailwind / composants, pagination / lazy loading des messages.
+
+Ce code est volontairement simple pour servir de point de départ. Dis-moi si tu veux :
+- Ajouter authentification (JWT + refresh tokens),
+- Persistance (Postgres / Mongo),
+- Hébergement (Docker + deploy),
+- Ou une UI plus proche de Discord avec avatars et reactions.
